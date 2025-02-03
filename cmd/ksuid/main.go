@@ -101,7 +101,7 @@ COMPONENTS:
 		id.String(),
 		strings.ToUpper(hex.EncodeToString(id.Bytes())),
 		id.Time(),
-		id.Microseconds(),
+		id.Milliseconds(),
 		id.Timestamp(),
 		strings.ToUpper(hex.EncodeToString(id.Payload())),
 	)

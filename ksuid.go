@@ -18,16 +18,17 @@ const (
 	// This number (14e8) was picked to be easy to remember.
 	epochStamp int64 = 1400000000
 
+	totalLengthInBytes = 20
+
 	// Timestamp is a uint32
-	timestampLengthInBytes = 4
+	timestampLengthInBytes   = 4
+	millisecondLengthInBytes = 2
 
-	nanoSecondLengthInBytes = 4
-
-	// Payload is 12-bytes
-	payloadLengthInBytes = 12
+	// Payload is 14-bytes
+	payloadLengthInBytes = totalLengthInBytes - timestampLengthInBytes - millisecondLengthInBytes
 
 	// KSUIDs are 20 bytes when binary encoded
-	byteLength = timestampLengthInBytes + nanoSecondLengthInBytes + payloadLengthInBytes
+	byteLength = timestampLengthInBytes + millisecondLengthInBytes + payloadLengthInBytes
 
 	// The length of a KSUID when string (base62) encoded
 	stringEncodedLength = 27
@@ -70,7 +71,11 @@ func (i KSUID) Append(b []byte) []byte {
 
 // The timestamp portion of the ID as a Time object
 func (i KSUID) Time() time.Time {
-	return correctedUTCTimestampToTime(i.Timestamp())
+	millis := i.Milliseconds()
+
+	ts := int64(i.Timestamp()) + epochStamp
+
+	return time.Unix(ts, int64(millis)*1e6)
 }
 
 // The timestamp portion of the ID as a bare integer which is uncorrected
@@ -81,13 +86,13 @@ func (i KSUID) Timestamp() uint32 {
 
 // The timestamp portion of the ID as a bare integer which is uncorrected
 // for KSUID's special epoch.
-func (i KSUID) Microseconds() uint32 {
-	return binary.BigEndian.Uint32(i[timestampLengthInBytes : timestampLengthInBytes+nanoSecondLengthInBytes])
+func (i KSUID) Milliseconds() uint16 {
+	return binary.BigEndian.Uint16(i[timestampLengthInBytes : timestampLengthInBytes+millisecondLengthInBytes])
 }
 
 // The 16-byte random payload without the timestamp
 func (i KSUID) Payload() []byte {
-	return i[timestampLengthInBytes+nanoSecondLengthInBytes:]
+	return i[timestampLengthInBytes+millisecondLengthInBytes:]
 }
 
 // String-encoded representation that can be passed through Parse()
@@ -211,16 +216,16 @@ func ParseOrNil(s string) KSUID {
 	return ksuid
 }
 
-func timeToCorrectedMicroseconds(t time.Time) uint32 {
-	return uint32(uint64(t.UnixMicro()) - uint64(timeToCorrectedUTCTimestamp(t))*1e6 - uint64(epochStamp)*1e6)
+func timeToCorrectedMilliseconds(t time.Time) uint16 {
+	return uint16(t.UnixMilli()) % 1000
 }
 
 func timeToCorrectedUTCTimestamp(t time.Time) uint32 {
 	return uint32(t.Unix() - epochStamp)
 }
 
-func correctedUTCTimestampToTime(ts uint32) time.Time {
-	return time.Unix(int64(ts)+epochStamp, 0)
+func correctedUTCTimestampToTime(ts uint32, ms uint16) time.Time {
+	return time.Unix(int64(ts)+epochStamp, int64(ms)*1e6)
 }
 
 // Generates a new KSUID. In the strange case that random bytes
@@ -245,7 +250,7 @@ func NewRandomWithTime(t time.Time) (ksuid KSUID, err error) {
 	randMutex.Lock()
 
 	_, err = io.ReadAtLeast(rander, randBuffer[:], len(randBuffer))
-	copy(ksuid[timestampLengthInBytes+nanoSecondLengthInBytes:], randBuffer[:])
+	copy(ksuid[timestampLengthInBytes+millisecondLengthInBytes:], randBuffer[:])
 
 	randMutex.Unlock()
 
@@ -257,9 +262,9 @@ func NewRandomWithTime(t time.Time) (ksuid KSUID, err error) {
 	ts := timeToCorrectedUTCTimestamp(t)
 	binary.BigEndian.PutUint32(ksuid[:timestampLengthInBytes], ts)
 
-	micros := timeToCorrectedMicroseconds(t)
+	millis := timeToCorrectedMilliseconds(t)
 
-	binary.BigEndian.PutUint32(ksuid[timestampLengthInBytes:timestampLengthInBytes+nanoSecondLengthInBytes+1], micros&0xFFFFF)
+	binary.BigEndian.PutUint16(ksuid[timestampLengthInBytes:timestampLengthInBytes+millisecondLengthInBytes+1], millis&0xFFFF)
 
 	return
 }
@@ -275,10 +280,10 @@ func FromParts(t time.Time, payload []byte) (KSUID, error) {
 	ts := timeToCorrectedUTCTimestamp(t)
 	binary.BigEndian.PutUint32(ksuid[:timestampLengthInBytes], ts)
 
-	micros := timeToCorrectedMicroseconds(t)
-	binary.BigEndian.PutUint32(ksuid[timestampLengthInBytes:timestampLengthInBytes+nanoSecondLengthInBytes+1], micros&0xFFFFFF)
+	millis := timeToCorrectedMilliseconds(t)
+	binary.BigEndian.PutUint16(ksuid[timestampLengthInBytes:timestampLengthInBytes+millisecondLengthInBytes+1], millis&0xFFFF)
 
-	copy(ksuid[timestampLengthInBytes+nanoSecondLengthInBytes+nanoSecondLengthInBytes:], payload)
+	copy(ksuid[timestampLengthInBytes+millisecondLengthInBytes+millisecondLengthInBytes:], payload)
 
 	return ksuid, nil
 }
@@ -410,8 +415,8 @@ func DecodeParts(s string) (uint32, uint32, []byte) {
 	}
 
 	ts := binary.BigEndian.Uint32(bytes[0:timestampLengthInBytes])
-	micros := binary.BigEndian.Uint32(bytes[timestampLengthInBytes : timestampLengthInBytes+nanoSecondLengthInBytes+1])
-	payload := bytes[timestampLengthInBytes+nanoSecondLengthInBytes:]
+	micros := binary.BigEndian.Uint32(bytes[timestampLengthInBytes : timestampLengthInBytes+millisecondLengthInBytes+1])
+	payload := bytes[timestampLengthInBytes+millisecondLengthInBytes:]
 
 	return ts, micros, payload
 }
