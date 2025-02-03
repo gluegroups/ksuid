@@ -21,11 +21,13 @@ const (
 	// Timestamp is a uint32
 	timestampLengthInBytes = 4
 
-	// Payload is 16-bytes
-	payloadLengthInBytes = 16
+	nanoSecondLengthInBytes = 4
+
+	// Payload is 12-bytes
+	payloadLengthInBytes = 12
 
 	// KSUIDs are 20 bytes when binary encoded
-	byteLength = timestampLengthInBytes + payloadLengthInBytes
+	byteLength = timestampLengthInBytes + nanoSecondLengthInBytes + payloadLengthInBytes
 
 	// The length of a KSUID when string (base62) encoded
 	stringEncodedLength = 27
@@ -38,8 +40,10 @@ const (
 )
 
 // KSUIDs are 20 bytes:
-//  00-03 byte: uint32 BE UTC timestamp with custom epoch
-//  04-19 byte: random "payload"
+//
+//	00-03 byte: uint32 BE UTC timestamp with custom epoch
+//	04-09 byte: uint64 BE microsecond timestamp
+//	10-19 byte: random "payload"
 type KSUID [byteLength]byte
 
 var (
@@ -47,10 +51,10 @@ var (
 	randMutex  = sync.Mutex{}
 	randBuffer = [payloadLengthInBytes]byte{}
 
-	errSize        = fmt.Errorf("Valid KSUIDs are %v bytes", byteLength)
-	errStrSize     = fmt.Errorf("Valid encoded KSUIDs are %v characters", stringEncodedLength)
-	errStrValue    = fmt.Errorf("Valid encoded KSUIDs are bounded by %s and %s", minStringEncoded, maxStringEncoded)
-	errPayloadSize = fmt.Errorf("Valid KSUID payloads are %v bytes", payloadLengthInBytes)
+	errSize        = fmt.Errorf("valid KSUIDs are %v bytes", byteLength)
+	errStrSize     = fmt.Errorf("valid encoded KSUIDs are %v characters", stringEncodedLength)
+	errStrValue    = fmt.Errorf("valid encoded KSUIDs are bounded by %s and %s", minStringEncoded, maxStringEncoded)
+	errPayloadSize = fmt.Errorf("valid KSUID payloads are %v bytes", payloadLengthInBytes)
 
 	// Represents a completely empty (invalid) KSUID
 	Nil KSUID
@@ -75,9 +79,15 @@ func (i KSUID) Timestamp() uint32 {
 	return binary.BigEndian.Uint32(i[:timestampLengthInBytes])
 }
 
+// The timestamp portion of the ID as a bare integer which is uncorrected
+// for KSUID's special epoch.
+func (i KSUID) Microseconds() uint32 {
+	return binary.BigEndian.Uint32(i[timestampLengthInBytes : timestampLengthInBytes+nanoSecondLengthInBytes])
+}
+
 // The 16-byte random payload without the timestamp
 func (i KSUID) Payload() []byte {
-	return i[timestampLengthInBytes:]
+	return i[timestampLengthInBytes+nanoSecondLengthInBytes:]
 }
 
 // String-encoded representation that can be passed through Parse()
@@ -201,6 +211,10 @@ func ParseOrNil(s string) KSUID {
 	return ksuid
 }
 
+func timeToCorrectedMicroseconds(t time.Time) uint32 {
+	return uint32(uint64(t.UnixMicro()) - uint64(timeToCorrectedUTCTimestamp(t))*1e6 - uint64(epochStamp)*1e6)
+}
+
 func timeToCorrectedUTCTimestamp(t time.Time) uint32 {
 	return uint32(t.Unix() - epochStamp)
 }
@@ -231,7 +245,7 @@ func NewRandomWithTime(t time.Time) (ksuid KSUID, err error) {
 	randMutex.Lock()
 
 	_, err = io.ReadAtLeast(rander, randBuffer[:], len(randBuffer))
-	copy(ksuid[timestampLengthInBytes:], randBuffer[:])
+	copy(ksuid[timestampLengthInBytes+nanoSecondLengthInBytes:], randBuffer[:])
 
 	randMutex.Unlock()
 
@@ -242,6 +256,11 @@ func NewRandomWithTime(t time.Time) (ksuid KSUID, err error) {
 
 	ts := timeToCorrectedUTCTimestamp(t)
 	binary.BigEndian.PutUint32(ksuid[:timestampLengthInBytes], ts)
+
+	micros := timeToCorrectedMicroseconds(t)
+
+	binary.BigEndian.PutUint32(ksuid[timestampLengthInBytes:timestampLengthInBytes+nanoSecondLengthInBytes+1], micros&0xFFFFF)
+
 	return
 }
 
@@ -256,7 +275,10 @@ func FromParts(t time.Time, payload []byte) (KSUID, error) {
 	ts := timeToCorrectedUTCTimestamp(t)
 	binary.BigEndian.PutUint32(ksuid[:timestampLengthInBytes], ts)
 
-	copy(ksuid[timestampLengthInBytes:], payload)
+	micros := timeToCorrectedMicroseconds(t)
+	binary.BigEndian.PutUint32(ksuid[timestampLengthInBytes:timestampLengthInBytes+nanoSecondLengthInBytes+1], micros&0xFFFFFF)
+
+	copy(ksuid[timestampLengthInBytes+nanoSecondLengthInBytes+nanoSecondLengthInBytes:], payload)
 
 	return ksuid, nil
 }
@@ -379,4 +401,17 @@ func (id KSUID) Prev() KSUID {
 	}
 
 	return v.ksuid(t)
+}
+
+func DecodeParts(s string) (uint32, uint32, []byte) {
+	bytes, err := Parse(s)
+	if err != nil {
+		panic(err)
+	}
+
+	ts := binary.BigEndian.Uint32(bytes[0:timestampLengthInBytes])
+	micros := binary.BigEndian.Uint32(bytes[timestampLengthInBytes : timestampLengthInBytes+nanoSecondLengthInBytes+1])
+	payload := bytes[timestampLengthInBytes+nanoSecondLengthInBytes:]
+
+	return ts, micros, payload
 }

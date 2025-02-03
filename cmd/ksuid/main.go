@@ -92,6 +92,7 @@ REPRESENTATION:
 COMPONENTS:
 
        Time: %v
+         ms: %v
   Timestamp: %v
     Payload: %v
 
@@ -100,6 +101,7 @@ COMPONENTS:
 		id.String(),
 		strings.ToUpper(hex.EncodeToString(id.Bytes())),
 		id.Time(),
+		id.Microseconds(),
 		id.Timestamp(),
 		strings.ToUpper(hex.EncodeToString(id.Payload())),
 	)
